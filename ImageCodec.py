@@ -207,6 +207,7 @@ class ImageCodec :
             end_index += 1
 
         return s
+    
     def get_codes(self,root):
         if root is None:
             return {}
