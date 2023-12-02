@@ -306,6 +306,6 @@ if __name__ == "__main__":
     plt.show()
     
     #plt.imshow(decoded_image)
-    #plt.show()
+    
 
     
