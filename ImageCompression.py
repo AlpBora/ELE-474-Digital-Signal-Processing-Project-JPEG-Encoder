@@ -135,14 +135,14 @@ class ImageCompression :
         return frequencies
 
     def build_huffman_tree(frequencies):
-        # Step 2: Create leaf nodes
+        # Create leaf nodes
         leaf_nodes = [(pixel_value, frequency) for pixel_value, frequency in enumerate(frequencies) if frequency > 0]
 
-        # Step 3: Initialize priority queue
+        # Initialize priority queue
         priority_queue = leaf_nodes.copy()
         heapq.heapify(priority_queue)
 
-        # Step 5: Build Huffman tree
+        # Build Huffman tree
         while len(priority_queue) > 1:
             # Dequeue two nodes with lowest weights
             node1 = heapq.heappop(priority_queue)
