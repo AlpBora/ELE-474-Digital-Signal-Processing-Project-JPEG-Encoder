@@ -7,6 +7,9 @@ from collections import Counter
 import time
 from tqdm import tqdm
 
+import heapq
+from collections import defaultdict
+
 class Node:
     def __init__(self, symbol=None, frequency=0, left=None, right=None):
         self.symbol = symbol
@@ -18,8 +21,9 @@ class Node:
         return self.frequency < other.frequency
 
 class ImageCodec :
-    def __init__(self,image):
-        self.image = image
+    def __init__(self,input_image_path,output_image_path,quantization_factor):
+        self.input_image_path = input_image_path
+        self.output_image_path = output_image_path
         self.QMatrix= np.zeros((8,8))
         self.QMatrix = [[16,11,10,16,24,40,51,61],
                                [12,12,14,19,26,58,60,55],
@@ -28,30 +32,44 @@ class ImageCodec :
                                [18,22,37,56,68,109,103,77],
                                [24,35,55,64,81,104,113,92],
                                [49,64,78,87,103,121,120,101],
-                               [72,92,95,98,112,100,103,99]]
+                               [72,92,95,98,112,100,103,99]] 
+        
+        self.quantization_factor = quantization_factor
+    
 
     def run(self):
-        image = self.getImage()
+        image = self.getImage(self.input_image_path)
+        height, width= image.shape
+        print("\nInput Image size:", height,"x",width,"\n")
+
         encoded_image, huffman_codes = self.encode_image(image)
-        print(encoded_image)
         decoded_image = self.decode_image(encoded_image,huffman_codes)
-        print(decoded_image)
-        return decoded_image
+
+        height, width= decoded_image.shape
+        print("\nDecoded image shape: ",height, "x",width,"\n")
+        print("Original Image:",image,"\n")
+        print("JPEG Image:",decoded_image,"\n")
+
+        self.toImage(decoded_image)
+        
+
+    def getImage(self,path):
+        image = cv.imread(path, cv.IMREAD_GRAYSCALE)
+        
+        return image
     
 
-    def getImage(self):
-        image_copy = self.image.copy()
-        height, width= self.image.shape
-        print(height,width)
-        print(self.image.dtype)
-        return image_copy
-    
+    def toImage(self,raw_data):
+        image = Image.fromarray(raw_data.astype(np.uint8))
+        image.save(self.output_image_path)
+        image.show()
+
 
     def get_8x8_block(self, image, x_count, y_count):
-        return image[(x_count - 1) * 8:x_count * 8, (y_count - 1) * 8:y_count * 8]
+        return image[(x_count - 1) * 8:x_count * 8, (y_count - 1) * 8:y_count * 8] # divide 8x8 blocks
 
 
-    def takeDCT(self,matrix): #MATLAB dc2 function formula
+    def takeDCT(self,matrix): #MATLAB dct2 function formula
         dct_matrix = np.zeros((8,8))
         for u in range(8):
             for v in range(8):
@@ -68,7 +86,9 @@ class ImageCodec :
                 
 
     def Quantization(self,matrix):
-        return np.round(matrix / self.QMatrix)
+        Quantization_matrix = np.multiply(self.QMatrix,self.quantization_factor)
+        return np.rint(np.divide(matrix,Quantization_matrix)) # matrix element wise division
+                                                       #and round to nearest integer
     
 
     def ZigZag_Scan(self, matrix):
@@ -118,41 +138,30 @@ class ImageCodec :
     
     
     def encode_image(self, image):
-        print("Starting Image Encoding")
-        image = image.astype('double')
-        average_num = 128
+        print("Starting Image Encoding\n")
+        print("--------------------------"*4)
+
+        image = image.astype(np.float16)
+        average_num = 128.0
         x_count, y_count = 1, 1
         finish = 0
         progress_bar = tqdm(total=64*64, desc="Encoding Image")
-
-        for i in range(0, 511):
-            for j in range(0, 511):
-                image[i, j] -= average_num
-
-        encoded_image = []
-        all_huffman_codes = {}
+        
+        image = image - average_num
+        total_zigzag_scan = []
         
         #Dikkat eksenler farklı
         while finish != 1:
             matrix = self.get_8x8_block(image, x_count, y_count)
             dct_matrix = self.takeDCT(matrix)
-            #print("DCT",dct_matrix)
             
             Qimage = self.Quantization(dct_matrix)
-            #print("Q",Qimage)
             zigzag_scan = self.ZigZag_Scan(Qimage)
             zigzag_scan = list(map(int, zigzag_scan))
-            #print("Zigzag",zigzag_scan)
-            encoded_vector, huffman_codes = self.huffman_encode(zigzag_scan)
-            #print("Huffman",encoded_vector)
 
+            total_zigzag_scan.extend(zigzag_scan)
+      
             progress_bar.update(1)
-
-            encoded_image.append(encoded_vector)
-            # Her bir huffman_codes dictionary'sini birleştir
-            for symbol, code in huffman_codes.items():
-                if symbol not in all_huffman_codes:
-                    all_huffman_codes[symbol] = code
             
             if y_count == 64 and x_count != 64:
                 y_count = 1
@@ -161,70 +170,32 @@ class ImageCodec :
                 finish = 1
             else:
                 y_count += 1
+
+        encoded_image, huffman_codes = self.huffman_encode(total_zigzag_scan)
+        
         progress_bar.close()
-        print("Image Encoding Finished")
-        return np.array(encoded_image), all_huffman_codes
+        print("Image Encoding Finished\n")
+        print("Encoded data number:",len(encoded_image),"Huffman code number: ",len(huffman_codes),"\n")
+        
+        return encoded_image, huffman_codes
 
     
     def huffman_decode(self, encoded_vector, codes):
-        reverse_codes = {code: symbol for symbol, code in codes.items()}
+       
         current_code = ""
         decoded_vector = []
 
+        # encoded vector den bit bit alarak current code'a atar eger mevcut
+        # huffman cod ile eşleşirse onun symbol unu append eder
         for bit in encoded_vector:
-            current_code += str(bit)
-            if current_code in reverse_codes:
-                symbol = reverse_codes[current_code]
-                decoded_vector.append(symbol)
-                current_code = ""
-
+            current_code += bit
+            for symbol, code in codes.items():
+                if current_code == code:
+                    decoded_vector.append(symbol)
+                    current_code = ""
+  
         return decoded_vector
 
-    def huffmanDecode (self,text,dictionary):
-        res = ""
-        while text:
-            for k in dictionary:
-                if text.startswith(k):
-                    res += dictionary[k]
-                    text = text[len(k):]
-        return res
-    
-    def huffman_decoding_func(self,data, tree):
-        
-        dict = self.get_codes(tree.root)
-        reversed_dict = {}
-        for value, key in dict.items():
-            reversed_dict[key] = value
-        start_index = 0
-        end_index = 1
-        max_index = len(data)
-        s = ''
-
-        while start_index != max_index:
-            if data[start_index : end_index] in reversed_dict:
-                s += reversed_dict[data[start_index : end_index]]
-                start_index = end_index
-            end_index += 1
-
-        return s
-    
-    def get_codes(self,root):
-        if root is None:
-            return {}
-        frequency, characters = root.value
-        char_dict = dict([(i, '') for i in list(characters)])
-
-        left_branch = self.get_codes(root.get_left_child())
-
-        for key, value in left_branch.items():
-            char_dict[key] += '0' + left_branch[key]
-
-        right_branch = get_codes(root.get_right_child())
-
-        for key, value in right_branch.items():
-            char_dict[key] += '1' + right_branch[key]
-
-        return char_dict
 
     def inverse_zigzag_scan(self, vector, rows, cols):
         matrix = np.zeros((rows, cols))
@@ -246,7 +217,8 @@ class ImageCodec :
     
 
     def inverseQuantization(self,Qimage):
-        return np.round(Qimage * self.QMatrix)
+        Quantization_matrix = np.multiply(self.QMatrix,self.quantization_factor)
+        return np.rint(np.multiply(Qimage,Quantization_matrix))
 
 
     def inverseDCT(self,dct_matrix):
@@ -267,44 +239,75 @@ class ImageCodec :
         return idct_matrix
     
 
-    def decode_image(self,image,huffman_codes):
-        print("Starting Image Decoding")
-        average_num = 128
+    def decode_image(self,encoded_image,huffman_codes):
+        print("Starting Image Decoding\n")
+        print("--------------------------"*4)
+        x_count=  1
+        y_count = 1
+        average_num = 128.0
         progress_bar = tqdm(total=64*64, desc="Decoding Image")
-        decoded_image = []
-        decoded_vector = self. huffmanDecode(image,huffman_codes)
-        block_size = 8
-        num_blocks = len(decoded_vector) // (block_size * block_size)
+        decoded_image = np.empty((512,512))
+        decoded_vector = self.huffman_decode(encoded_image,huffman_codes)
+        block_size = 64
         
-        for i in range(num_blocks):    
-            start_index = i * block_size * block_size
-            end_index = start_index + block_size * block_size
+        for i in range(4096):    
+            start_index = i * block_size 
+            end_index = start_index + block_size 
             block_vector = decoded_vector[start_index:end_index]
-            inverse_zigzag_scan = self.inverse_zigzag_scan(block_vector,block_size,block_size)
+
+            inverse_zigzag_scan = self.inverse_zigzag_scan(block_vector,8,8)
             unquantized_matrix = self.inverseQuantization(inverse_zigzag_scan)
             idct_matrix = self.inverseDCT(unquantized_matrix)
-
-            progress_bar.update(1)
-            decoded_image.append(idct_matrix)
         
-        for i in range(0, len(decoded_image)):
-            decoded_image[i] += average_num
+            progress_bar.update(1)
+            
+            decoded_image[(x_count - 1) * 8: x_count * 8, (y_count - 1) * 8:y_count * 8] = idct_matrix
+           
+            if y_count == 64 and x_count != 64:
+                y_count = 1
+                x_count += 1
+            else:
+                y_count += 1
 
+        decoded_image = decoded_image + average_num
+        decoded_image = decoded_image.astype(np.uint8)
+        
         progress_bar.close()
-        print("Image Encoding Finished")
-        #decoded_image = decoded_image.astype(np.uint8)
+        print("Image Decoding Finished")
 
-        return np.array(decoded_image)
+        return decoded_image
     
 
+    def calculate_PSNR(self, original, compressed): 
+        mse = np.mean(np.power((original - compressed), 2))
+        max_pixel = 255.0
+        psnr = 20 * math.log10(max_pixel / math.sqrt(mse)) 
+        return psnr 
+    
 
 if __name__ == "__main__":
 
-    image = cv.imread("lena_gray.bmp", cv.IMREAD_GRAYSCALE)
-    codec_instance = ImageCodec(image)
-    decoded_image = codec_instance.run()
-    plt.imshow(decoded_image)
-    plt.show()
+    # get the start time
+    st = time.time()
+    
+    input_image_path = "lena_gray.bmp"
+    output_image_path="jpeg_lena.bmp"
+    codec_instance = ImageCodec(input_image_path,output_image_path,quantization_factor = 1)
+    codec_instance.run()
+
+    # get the end time
+    et = time.time()
+    # get the execution time
+    elapsed_time = et - st
+    print('Execution time:', elapsed_time, 'seconds')
+
+    original = codec_instance.getImage(input_image_path)
+    compressed = codec_instance.getImage(output_image_path)
+    psnr_value = codec_instance.calculate_PSNR(original, compressed) 
+    print(f"PSNR value is {psnr_value} dB") 
+
+    
+    
     
     
 
